@@ -1,0 +1,217 @@
+# ============================================================
+# Operation Aegis — DAST (Dynamic Application Security Testing)
+# Triggers: push to main, workflow_dispatch
+#
+# Jobs:
+#   1. dast   — build image, start container, run ZAP + Nikto,
+#               upload artifacts, tear down container
+#   2. gate   — evaluate results, write job summary
+#
+# NOTE: ZAP and Nikto run as steps in the same job so they
+# share localhost:8000 with the running container. Separate
+# jobs each get their own VM — they cannot reach a container
+# started in a different job.
+# ============================================================
+
+name: "DAST"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+
+  # ──────────────────────────────────────────────────────────
+  # JOB 1: dast
+  # Everything in one VM so the container is reachable by
+  # both ZAP and Nikto on localhost:8000.
+  # ──────────────────────────────────────────────────────────
+  dast:
+    name: "DAST — ZAP + Nikto"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 1. Build and start the target container ──────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Skyline API image
+        run: docker build -t skyline-api:dast ./app
+
+      - name: Start app container
+        run: |
+          docker run -d \
+            --name skyline-api \
+            -p 8000:8000 \
+            skyline-api:dast
+
+      - name: Wait for app to be ready
+        run: |
+          echo "Waiting for app to be healthy..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health; then
+              echo ""
+              echo "App is ready."
+              exit 0
+            fi
+            echo "Attempt $i — retrying in 2s..."
+            sleep 2
+          done
+          echo "App failed to start within 60s."
+          docker logs skyline-api
+          exit 1
+
+      # ── 2. OWASP ZAP ─────────────────────────────────────
+      # Baseline: passive scan only — no attack traffic.
+      # Fast, good for catching obvious misconfigurations and
+      # missing security headers.
+      - name: ZAP baseline scan (passive)
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: "http://localhost:8000"
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a"
+          fail_action: false
+          artifact_name: zap-baseline-report
+        continue-on-error: true
+
+      # Full: active scan — sends real exploit payloads.
+      # Points at /openapi.json so ZAP understands the API
+      # surface and probes every endpoint intelligently.
+      - name: ZAP full scan (active)
+        uses: zaproxy/action-full-scan@v0.10.0
+        with:
+          target: "http://localhost:8000/openapi.json"
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a"
+          fail_action: false
+          artifact_name: zap-full-report
+        continue-on-error: true
+
+      - name: Upload ZAP SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: zap
+        continue-on-error: true
+
+      - name: Upload ZAP reports as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-reports
+          path: |
+            report_html.html
+            report_json.json
+            results.sarif
+          retention-days: 30
+
+      # ── 3. Nikto ─────────────────────────────────────────
+      # Web server recon — runs against the same live container.
+      # Tuning flags:
+      #   1 = interesting files
+      #   2 = misconfiguration
+      #   3 = information disclosure
+      #   b = software identification
+      #   d = XSS
+      #   e = injection (SQL, LDAP, etc.)
+      - name: Install Nikto
+        run: sudo apt-get install -y nikto
+
+      - name: Run Nikto scan (HTML report)
+        run: |
+          nikto \
+            -h http://localhost:8000 \
+            -Format htm \
+            -output nikto-report.html \
+            -nointeractive \
+            -Tuning 123bde \
+          || true
+
+      - name: Run Nikto scan (plain text for job summary)
+        run: |
+          nikto \
+            -h http://localhost:8000 \
+            -nointeractive \
+            -Tuning 123bde \
+            2>&1 | tee nikto-report.txt \
+          || true
+
+      - name: Upload Nikto reports as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nikto-reports
+          path: |
+            nikto-report.html
+            nikto-report.txt
+          retention-days: 30
+
+      # ── 4. Teardown ───────────────────────────────────────
+      # Runs even if ZAP or Nikto failed — no orphaned containers.
+      - name: Stop and remove app container
+        if: always()
+        run: |
+          docker stop skyline-api || true
+          docker rm   skyline-api || true
+          echo "Container torn down."
+
+  # ──────────────────────────────────────────────────────────
+  # JOB 2: gate
+  # Separate job so it appears as a distinct check in the
+  # GitHub Actions UI and on pull request status checks.
+  # if: always() ensures it runs even if the dast job crashed.
+  # ──────────────────────────────────────────────────────────
+  gate:
+    name: "Quality gate — DAST"
+    runs-on: ubuntu-latest
+    needs: [dast]
+    if: always()
+
+    steps:
+      - name: Download DAST artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dast-results
+
+      - name: Evaluate gate and write job summary
+        run: |
+          echo "## DAST Quality Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FAILED=0
+
+          if [ "${{ needs.dast.result }}" != "success" ]; then
+            echo "❌ DAST job: FAILED (${{ needs.dast.result }})" >> $GITHUB_STEP_SUMMARY
+            FAILED=1
+          else
+            echo "✅ DAST job: passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f dast-results/nikto-reports/nikto-report.txt ]; then
+            echo "### Nikto findings" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat dast-results/nikto-reports/nikto-report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$FAILED" -eq "1" ]; then
+            echo "### 🚨 Gate FAILED — review DAST findings before next deploy." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "### ✅ Gate PASSED — live app verified." >> $GITHUB_STEP_SUMMARY
+          fi

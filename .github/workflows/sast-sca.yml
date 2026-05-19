@@ -70,16 +70,21 @@ jobs:
   # ──────────────────────────────────────────────────────────
   # JOB 2: Semgrep
   # ──────────────────────────────────────────────────────────
-  semgrep:
+semgrep:
     name: "Semgrep - custom rule SAST"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    container:
-      image: semgrep/semgrep
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Semgrep
+        run: pip install semgrep
 
       - name: Run Semgrep scan
         run: |

@@ -131,7 +131,7 @@ jobs:
 
       # 3a. Scan requirements.txt
       - name: Trivy - scan requirements.txt
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.29.0
         with:
           scan-type: fs
           scan-ref: ./app/requirements.txt
@@ -155,7 +155,7 @@ jobs:
         run: docker build -t skyline-api:scan ./app
 
       - name: Trivy - scan container image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.29.0
         with:
           scan-type: image
           image-ref: skyline-api:scan
@@ -173,7 +173,7 @@ jobs:
 
       # 3c. Human-readable table report
       - name: Trivy - generate table report
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.29.0
         with:
           scan-type: image
           image-ref: skyline-api:scan

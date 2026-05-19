@@ -70,7 +70,7 @@ jobs:
   # ──────────────────────────────────────────────────────────
   # JOB 2: Semgrep
   # ──────────────────────────────────────────────────────────
-semgrep:
+  semgrep:
     name: "Semgrep - custom rule SAST"
     runs-on: ubuntu-latest
 

@@ -93,6 +93,7 @@ jobs:
             --config "p/secrets" \
             --config "p/owasp-top-ten" \
             --config "p/security-audit" \
+            --metrics=off \
             --sarif \
             --output semgrep-results.sarif \
             --severity WARNING \

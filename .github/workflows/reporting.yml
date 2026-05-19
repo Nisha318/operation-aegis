@@ -1,10 +1,10 @@
 # ============================================================
-# Operation Aegis — Reporting
+# Operation Aegis - Reporting
 # Triggers: after sast-sca, dast, or secrets-scan complete,
 #           workflow_dispatch (re-run reports without re-scanning)
 #
 # Jobs:
-#   1. aggregate  — download all artifacts, build summary
+#   1. aggregate  - download all artifacts, build summary
 #                   report, send Slack notification
 # ============================================================
 
@@ -28,9 +28,6 @@ jobs:
 
   # ──────────────────────────────────────────────────────────
   # JOB 1: aggregate
-  # Downloads all artifacts produced by the three scan
-  # workflows, builds a unified Markdown summary report,
-  # uploads it as an artifact, and sends a Slack notification.
   # ──────────────────────────────────────────────────────────
   aggregate:
     name: "Aggregate reports + notify"
@@ -40,16 +37,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 1. Download all scan artifacts ───────────────────
-      # Downloads everything produced by sast-sca, dast, and
-      # secrets-scan into subdirectories under ./all-artifacts.
+      # 1. Download all scan artifacts
       - name: Download artifacts from SAST + SCA workflow
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: sast-sca.yml
           run_type: completed
           path: all-artifacts/sast-sca
-        continue-on-error: true   # workflow may not have run yet
+        continue-on-error: true
 
       - name: Download artifacts from DAST workflow
         uses: dawidd6/action-download-artifact@v3
@@ -67,7 +62,7 @@ jobs:
           path: all-artifacts/secrets
         continue-on-error: true
 
-      # ── 2. Build unified Markdown report ─────────────────
+      # 2. Build unified Markdown report
       - name: Build summary report
         run: |
           REPORT="aegis-security-report.md"
@@ -75,33 +70,30 @@ jobs:
           TIMESTAMP=$(date -u "+%Y-%m-%d %H:%M UTC")
 
           cat >> $REPORT << EOF
-          # Operation Aegis — Security Report
+          # Operation Aegis - Security Report
           **Generated:** $TIMESTAMP
           **Run:** $RUN_URL
           **Commit:** ${{ github.sha }}
 
           ---
 
-          ## SAST + SCA (Phase 1)
+          ## SAST + SCA
           EOF
 
-          # CodeQL
-          if find all-artifacts/sast-sca -name "*.sarif" | grep -q codeql 2>/dev/null; then
+          if find all-artifacts/sast-sca -name "*.sarif" 2>/dev/null | grep -q codeql; then
             FINDINGS=$(grep -r '"level": "error"' all-artifacts/sast-sca/ | wc -l || echo 0)
             echo "- **CodeQL:** $FINDINGS HIGH/CRITICAL findings" >> $REPORT
           else
             echo "- **CodeQL:** artifact not available" >> $REPORT
           fi
 
-          # Semgrep
-          if find all-artifacts/sast-sca -name "*.sarif" | grep -q semgrep 2>/dev/null; then
+          if find all-artifacts/sast-sca -name "*.sarif" 2>/dev/null | grep -q semgrep; then
             FINDINGS=$(grep -r '"level": "error"' all-artifacts/sast-sca/ | wc -l || echo 0)
             echo "- **Semgrep:** $FINDINGS HIGH/CRITICAL findings" >> $REPORT
           else
             echo "- **Semgrep:** artifact not available" >> $REPORT
           fi
 
-          # Trivy
           if find all-artifacts/sast-sca -name "trivy-image-report.txt" 2>/dev/null | grep -q .; then
             echo "" >> $REPORT
             echo "### Trivy image scan" >> $REPORT
@@ -114,17 +106,15 @@ jobs:
 
           ---
 
-          ## DAST (Phase 2)
+          ## DAST
           EOF
 
-          # ZAP
           if find all-artifacts/dast -name "report_html.html" 2>/dev/null | grep -q .; then
-            echo "- **OWASP ZAP:** report available — see zap-reports artifact" >> $REPORT
+            echo "- **OWASP ZAP:** report available - see zap-reports artifact" >> $REPORT
           else
             echo "- **OWASP ZAP:** artifact not available" >> $REPORT
           fi
 
-          # Nikto
           if find all-artifacts/dast -name "nikto-report.txt" 2>/dev/null | grep -q .; then
             echo "" >> $REPORT
             echo "### Nikto findings" >> $REPORT
@@ -139,10 +129,9 @@ jobs:
 
           ---
 
-          ## Secrets scan (Phase 3)
+          ## Secrets scan
           EOF
 
-          # Gitleaks
           if find all-artifacts/secrets -name "*.sarif" 2>/dev/null | grep -q .; then
             FINDINGS=$(grep -r '"level": "error"' all-artifacts/secrets/ | wc -l || echo 0)
             echo "- **Gitleaks:** $FINDINGS findings" >> $REPORT
@@ -150,7 +139,6 @@ jobs:
             echo "- **Gitleaks:** artifact not available" >> $REPORT
           fi
 
-          # TruffleHog
           if find all-artifacts/secrets -name "trufflehog-results.json" 2>/dev/null | grep -q .; then
             COUNT=$(wc -l < all-artifacts/secrets/trufflehog-report/trufflehog-results.json 2>/dev/null || echo 0)
             echo "- **TruffleHog:** $COUNT findings" >> $REPORT
@@ -162,22 +150,7 @@ jobs:
 
           ---
 
-          ## Artifacts
-          All detailed reports are available as downloadable artifacts on the
-          individual workflow runs linked above.
-
-          | Artifact | Workflow |
-          |----------|----------|
-          | codeql-sarif | SAST + SCA |
-          | semgrep-sarif | SAST + SCA |
-          | trivy-reports | SAST + SCA |
-          | zap-reports | DAST |
-          | nikto-reports | DAST |
-          | gitleaks-report | Secrets scan |
-          | trufflehog-report | Secrets scan |
-
-          ---
-          *Operation Aegis · DevSec Blueprint capstone · #DevSecBlueprint*
+          *Operation Aegis - DevSec Blueprint capstone - #DevSecBlueprint*
           EOF
 
           echo "Report written to $REPORT"
@@ -193,28 +166,20 @@ jobs:
       - name: Write report to GitHub Actions job summary
         run: cat aegis-security-report.md >> $GITHUB_STEP_SUMMARY
 
-      # ── 3. Slack notification ─────────────────────────────
-      # Sends pass/fail notification to your Slack workspace.
-      # Requires SLACK_WEBHOOK_URL secret — add under:
-      # Settings → Secrets and variables → Actions
+      # 3. Slack notification
       - name: Determine overall pipeline status
         id: status
         run: |
-          # workflow_run event carries the triggering workflow's conclusion
           CONCLUSION="${{ github.event.workflow_run.conclusion }}"
           if [ "$CONCLUSION" = "success" ]; then
-            echo "emoji=✅" >> $GITHUB_OUTPUT
             echo "color=good" >> $GITHUB_OUTPUT
             echo "text=All scans passed" >> $GITHUB_OUTPUT
           elif [ -z "$CONCLUSION" ]; then
-            # workflow_dispatch — no upstream conclusion available
-            echo "emoji=ℹ️" >> $GITHUB_OUTPUT
             echo "color=#378ADD" >> $GITHUB_OUTPUT
             echo "text=Manual report run" >> $GITHUB_OUTPUT
           else
-            echo "emoji=🚨" >> $GITHUB_OUTPUT
             echo "color=danger" >> $GITHUB_OUTPUT
-            echo "text=Scan failures detected — review required" >> $GITHUB_OUTPUT
+            echo "text=Scan failures detected - review required" >> $GITHUB_OUTPUT
           fi
 
       - name: Send Slack notification
@@ -231,7 +196,7 @@ jobs:
                       "type": "section",
                       "text": {
                         "type": "mrkdwn",
-                        "text": "${{ steps.status.outputs.emoji }} *Operation Aegis — Security Pipeline*\n${{ steps.status.outputs.text }}"
+                        "text": "*Operation Aegis - Security Pipeline*\n${{ steps.status.outputs.text }}"
                       }
                     },
                     {

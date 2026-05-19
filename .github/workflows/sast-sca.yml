@@ -1,37 +1,38 @@
 # ============================================================
-# Operation Aegis — Phase 1: Code Security (SAST + SCA)
-# Triggers: pull_request to main, push to main, workflow_dispatch
+# Operation Aegis - SAST + SCA
+# Triggers: pull_request to main, push to main,
+#           schedule (nightly), workflow_dispatch
 #
 # Jobs:
-#   1. codeql       — static analysis via GitHub CodeQL
-#   2. semgrep      — custom rule SAST (Python security ruleset)
-#   3. trivy-sca    — dependency + container image scanning
-#   4. gate         — quality gate: fails if any HIGH/CRITICAL found
+#   1. codeql      - static analysis via GitHub CodeQL
+#   2. semgrep     - custom rule SAST (Python security ruleset)
+#   3. trivy-sca   - dependency + container image scanning
+#   4. gate        - quality gate: fails if any HIGH/CRITICAL found
 # ============================================================
 
-name: "Phase 1 — SAST + SCA"
+name: "SAST + SCA"
 
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-  security-events: write   # required to upload SARIF to GitHub Security tab
+  security-events: write
   actions: read
 
 jobs:
 
   # ──────────────────────────────────────────────────────────
-  # JOB 1: CodeQL — static analysis
-  # Detects: SQL injection, command injection, path traversal,
-  #          insecure deserialization, and more.
+  # JOB 1: CodeQL
   # ──────────────────────────────────────────────────────────
   codeql:
-    name: "CodeQL — static analysis"
+    name: "CodeQL - static analysis"
     runs-on: ubuntu-latest
 
     strategy:
@@ -47,7 +48,6 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          # python security-and-quality pack covers OWASP Top 10
           queries: security-and-quality
 
       - name: Autobuild
@@ -58,7 +58,7 @@ jobs:
         with:
           category: "/language:${{ matrix.language }}"
           output: codeql-results
-          upload: always   # uploads SARIF to GitHub Security tab
+          upload: always
 
       - name: Upload CodeQL SARIF as artifact
         uses: actions/upload-artifact@v4
@@ -68,12 +68,10 @@ jobs:
           retention-days: 30
 
   # ──────────────────────────────────────────────────────────
-  # JOB 2: Semgrep — custom rule SAST
-  # Detects: hardcoded secrets, insecure subprocess usage,
-  #          missing auth checks, sensitive data in responses.
+  # JOB 2: Semgrep
   # ──────────────────────────────────────────────────────────
   semgrep:
-    name: "Semgrep — custom rule SAST"
+    name: "Semgrep - custom rule SAST"
     runs-on: ubuntu-latest
     container:
       image: semgrep/semgrep
@@ -115,34 +113,32 @@ jobs:
         run: |
           HIGH=$(grep -c '"level": "error"' semgrep-results.sarif || true)
           if [ "$HIGH" -gt "0" ]; then
-            echo "❌ Semgrep found $HIGH HIGH/CRITICAL findings. Fix before merging."
+            echo "Semgrep found $HIGH HIGH/CRITICAL findings. Fix before merging."
             exit 1
           fi
-          echo "✅ No HIGH/CRITICAL findings from Semgrep."
+          echo "No HIGH/CRITICAL findings from Semgrep."
 
   # ──────────────────────────────────────────────────────────
-  # JOB 3: Trivy — SCA (dependencies + container image)
-  # Detects: CVEs in Python packages, base image vulnerabilities,
-  #          misconfigurations in Dockerfile.
+  # JOB 3: Trivy - dependencies + container image
   # ──────────────────────────────────────────────────────────
   trivy-sca:
-    name: "Trivy — dependency + image scan"
+    name: "Trivy - dependency + image scan"
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 3a. Scan Python dependencies (requirements.txt) ──
-      - name: Trivy — scan requirements.txt
-        uses: aquasecurity/trivy-action@master
+      # 3a. Scan requirements.txt
+      - name: Trivy - scan requirements.txt
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           scan-ref: ./app/requirements.txt
           format: sarif
           output: trivy-deps-results.sarif
           severity: HIGH,CRITICAL
-          exit-code: 0   # gate job handles the fail
+          exit-code: 0
 
       - name: Upload Trivy deps SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
@@ -151,22 +147,22 @@ jobs:
           sarif_file: trivy-deps-results.sarif
           category: trivy-deps
 
-      # ── 3b. Build and scan the container image ──
+      # 3b. Build and scan the container image
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image (local, not pushed)
+      - name: Build Docker image
         run: docker build -t skyline-api:scan ./app
 
-      - name: Trivy — scan container image
-        uses: aquasecurity/trivy-action@master
+      - name: Trivy - scan container image
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: image
           image-ref: skyline-api:scan
           format: sarif
           output: trivy-image-results.sarif
           severity: HIGH,CRITICAL
-          exit-code: 0   # gate job handles the fail
+          exit-code: 0
 
       - name: Upload Trivy image SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
@@ -175,9 +171,9 @@ jobs:
           sarif_file: trivy-image-results.sarif
           category: trivy-image
 
-      # ── 3c. Human-readable table for the artifact report ──
-      - name: Trivy — generate table report
-        uses: aquasecurity/trivy-action@master
+      # 3c. Human-readable table report
+      - name: Trivy - generate table report
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: image
           image-ref: skyline-api:scan
@@ -198,11 +194,10 @@ jobs:
           retention-days: 30
 
   # ──────────────────────────────────────────────────────────
-  # JOB 4: Gate — fail the pipeline on HIGH/CRITICAL findings
-  # Runs after all three scanners, even if one fails.
+  # JOB 4: Gate
   # ──────────────────────────────────────────────────────────
   gate:
-    name: "Quality gate — Phase 1"
+    name: "Quality gate - SAST + SCA"
     runs-on: ubuntu-latest
     needs: [codeql, semgrep, trivy-sca]
     if: always()
@@ -215,40 +210,37 @@ jobs:
 
       - name: Evaluate gate
         run: |
-          echo "## Phase 1 Quality Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "## SAST + SCA Quality Gate Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           FAILED=0
 
-          # Check CodeQL job result
           if [ "${{ needs.codeql.result }}" != "success" ]; then
-            echo "❌ CodeQL: FAILED (${{ needs.codeql.result }})" >> $GITHUB_STEP_SUMMARY
+            echo "CodeQL: FAILED (${{ needs.codeql.result }})" >> $GITHUB_STEP_SUMMARY
             FAILED=1
           else
-            echo "✅ CodeQL: passed" >> $GITHUB_STEP_SUMMARY
+            echo "CodeQL: passed" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Check Semgrep job result
           if [ "${{ needs.semgrep.result }}" != "success" ]; then
-            echo "❌ Semgrep: FAILED (${{ needs.semgrep.result }})" >> $GITHUB_STEP_SUMMARY
+            echo "Semgrep: FAILED (${{ needs.semgrep.result }})" >> $GITHUB_STEP_SUMMARY
             FAILED=1
           else
-            echo "✅ Semgrep: passed" >> $GITHUB_STEP_SUMMARY
+            echo "Semgrep: passed" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Check Trivy job result
           if [ "${{ needs.trivy-sca.result }}" != "success" ]; then
-            echo "❌ Trivy SCA: FAILED (${{ needs.trivy-sca.result }})" >> $GITHUB_STEP_SUMMARY
+            echo "Trivy SCA: FAILED (${{ needs.trivy-sca.result }})" >> $GITHUB_STEP_SUMMARY
             FAILED=1
           else
-            echo "✅ Trivy SCA: passed" >> $GITHUB_STEP_SUMMARY
+            echo "Trivy SCA: passed" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "$FAILED" -eq "1" ]; then
-            echo "### 🚨 Gate FAILED — resolve all HIGH/CRITICAL findings before merging." >> $GITHUB_STEP_SUMMARY
+            echo "Gate FAILED - resolve all HIGH/CRITICAL findings before merging." >> $GITHUB_STEP_SUMMARY
             exit 1
           else
-            echo "### ✅ Gate PASSED — no HIGH/CRITICAL findings. Safe to merge." >> $GITHUB_STEP_SUMMARY
+            echo "Gate PASSED - no HIGH/CRITICAL findings. Safe to merge." >> $GITHUB_STEP_SUMMARY
           fi

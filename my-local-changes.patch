@@ -1,0 +1,188 @@
+diff --git a/.github/workflows/sast-sca.yml b/.github/workflows/sast-sca.yml
+index abdc6ac..661511b 100644
+--- a/.github/workflows/sast-sca.yml
++++ b/.github/workflows/sast-sca.yml
+@@ -1,5 +1,5 @@
+ # ============================================================
+-# Operation Aegis — Phase 1: Code Security (SAST + SCA)
++# Operation Aegis — Code Security (SAST + SCA)
+ # Triggers: pull_request to main, push to main, workflow_dispatch
+ #
+ # Jobs:
+@@ -9,7 +9,7 @@
+ #   4. gate         — quality gate: fails if any HIGH/CRITICAL found
+ # ============================================================
+ 
+-name: "Phase 1 — SAST + SCA"
++name: "SAST + SCA"
+ 
+ on:
+   pull_request:
+@@ -202,7 +202,7 @@ jobs:
+   # Runs after all three scanners, even if one fails.
+   # ──────────────────────────────────────────────────────────
+   gate:
+-    name: "Quality gate — Phase 1"
++    name: "Quality gate - SAST + SCA"
+     runs-on: ubuntu-latest
+     needs: [codeql, semgrep, trivy-sca]
+     if: always()
+@@ -215,7 +215,7 @@ jobs:
+ 
+       - name: Evaluate gate
+         run: |
+-          echo "## Phase 1 Quality Gate Results" >> $GITHUB_STEP_SUMMARY
++          echo "## SAST + SCA Quality Gate Results" >> $GITHUB_STEP_SUMMARY
+           echo "" >> $GITHUB_STEP_SUMMARY
+ 
+           FAILED=0
+diff --git a/README.md b/README.md
+index 8fbb9d3..985bfc6 100644
+--- a/README.md
++++ b/README.md
+@@ -1,13 +1,13 @@
+ # Operation Aegis 🛡️
+-### DevSecOps Capstone — Skyline Financial Tech
++### DevSecOps Capstone - Skyline Financial Tech
+ 
+ > A fully automated, end-to-end security pipeline built on GitHub Actions.
+ > Four phases of defence protecting a vulnerable demo banking API.
+ 
+-![Phase 1 SAST + SCA](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase1-sast-sca.yml?label=Phase%201%20SAST%2BSCA&style=flat-square)
+-![Phase 2 DAST](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase2-dast.yml?label=Phase%202%20DAST&style=flat-square)
+-![Phase 3 Secrets](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase3-secrets.yml?label=Phase%203%20Secrets&style=flat-square)
+-![Phase 4 Reporting](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase4-reporting.yml?label=Phase%204%20Reporting&style=flat-square)
++![SAST + SCA](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/sast-sca.yml?label=SAST%2BSCA&style=flat-square)
++![DAST](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/dast.yml?label=DAST&style=flat-square)
++![Secrets](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/secrets-scan.yml?label=Secrets&style=flat-square)
++![Reporting](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/reporting.yml?label=Reporting&style=flat-square)
+ 
+ ---
+ 
+@@ -17,18 +17,18 @@
+ operation-aegis/
+ ├── .github/
+ │   └── workflows/
+-│       ├── phase1-sast-sca.yml       # CodeQL + Semgrep + Trivy
+-│       ├── phase2-dast.yml           # OWASP ZAP + Nikto  (Week 2)
+-│       ├── phase3-secrets.yml        # Gitleaks + TruffleHog  (Week 3)
+-│       └── phase4-reporting.yml      # Aggregated reports + Slack  (Week 4)
++│       ├── sast-sca.yml       # CodeQL + Semgrep + Trivy
++│       ├── dast.yml           # OWASP ZAP + Nikto  
++│       ├── secrets.yml        # Gitleaks + TruffleHog   
++│       └── reporting.yml      # Aggregated reports + Slack   
+ ├── app/
+ │   ├── main.py                       # FastAPI demo app (intentionally vulnerable)
+-│   ├── requirements.txt              # Pinned deps — includes outdated packages
++│   ├── requirements.txt              # Pinned deps - includes outdated packages
+ │   └── Dockerfile                    # Container image for scanning + DAST
+ ├── tests/
+ │   └── test_api.py                   # Smoke tests (pytest)
+ ├── docs/
+-│   └── threat-model.md               # Architecture threat model (Week 4)
++│   └── threat-model.md               # Architecture threat model  
+ └── README.md
+ ```
+ 
+@@ -48,7 +48,9 @@ operation-aegis/
+ | VULN-008 | Debug mode in production | `Dockerfile` CMD | Trivy |
+ 
+ > **All vulnerabilities are intentional.** This repo exists to generate real
+-> scanner findings for the capstone write-up. Do not deploy.
++> scanner findings for the Operation Aegis write-up. The app runs only as an
++> ephemeral container inside GitHub Actions during DAST scanning. It is never
++> deployed to a live environment.
+ 
+ ---
+ 
+@@ -56,10 +58,10 @@ operation-aegis/
+ 
+ | Phase | Workflow | Triggers | Tools |
+ |-------|----------|----------|-------|
+-| 1 — SAST + SCA | `phase1-sast-sca.yml` | PR, push to main, schedule, manual | CodeQL, Semgrep, Trivy |
+-| 2 — DAST | `phase2-dast.yml` | Push to main, manual | OWASP ZAP, Nikto |
+-| 3 — Secrets | `phase3-secrets.yml` | PR, push to main, schedule, manual | Gitleaks, TruffleHog |
+-| 4 — Reporting | `phase4-reporting.yml` | After Phase 1-3, manual | Aggregator, Slack |
++| SAST + SCA | `sast-sca.yml` | PR, push to main, schedule, manual | CodeQL, Semgrep, Trivy |
++| DAST | `dast.yml` | Push to main, manual | OWASP ZAP, Nikto |
++| Secrets | `secrets.yml` | PR, push to main, schedule, manual | Gitleaks, TruffleHog |
++| Reporting | `reporting.yml` | After sast-sca / dast / secrets-scan complete, manual | Aggregator, Slack |
+ 
+ ---
+ 
+@@ -67,7 +69,7 @@ operation-aegis/
+ 
+ ```bash
+ # Clone and enter the repo
+-git clone https://github.com/YOUR_USERNAME/operation-aegis.git
++git clone https://github.com/Nisha318/operation-aegis.git
+ cd operation-aegis
+ 
+ # Run the demo app locally
+@@ -95,14 +97,14 @@ Add these in **Settings → Secrets and variables → Actions** before running w
+ 
+ | Secret | Used by | Notes |
+ |--------|---------|-------|
+-| `SEMGREP_APP_TOKEN` | Phase 1 — Semgrep | Free at semgrep.dev — optional but enables dashboard |
+-| `SLACK_WEBHOOK_URL` | Phase 4 — Reporting | Incoming webhook from your Slack workspace |
++| `SEMGREP_APP_TOKEN` | Semgrep | Free at semgrep.dev; enables dashboard |
++| `SLACK_WEBHOOK_URL` | Reporting | Incoming webhook from your Slack workspace |
+ 
+ ---
+ 
+ ## Blog post
+ 
+-*Coming soon — Hashnode / dev.to*
++*Coming soon*
+ 
+ ---
+ 
+diff --git a/app/requirements.txt b/app/requirements.txt
+index 59774b0..1869395 100644
+--- a/app/requirements.txt
++++ b/app/requirements.txt
+@@ -1,6 +1,6 @@
+ # Skyline Financial Tech — API dependencies
+ # NOTE: cryptography==38.0.0 is intentionally pinned to an outdated version
+-# with known CVEs — for Trivy SCA scanning demonstration.
++# with known CVEs - for Trivy SCA scanning demonstration.
+ 
+ fastapi==0.111.0
+ uvicorn==0.30.1
+diff --git a/packages/Dockerfile b/packages/Dockerfile
+deleted file mode 100644
+index ab2ab96..0000000
+--- a/packages/Dockerfile
++++ /dev/null
+@@ -1,20 +0,0 @@
+-# Skyline Financial Tech — Demo API container
+-# NOTE: intentionally uses a non-slim base image and runs as root
+-# for Trivy image scanning demonstration.
+-
+-FROM python:3.11
+-
+-# VULN-007: Running as root (detected by Trivy / Checkov)
+-# A hardened image would add a non-root user here.
+-WORKDIR /app
+-
+-COPY requirements.txt .
+-RUN pip install --no-cache-dir -r requirements.txt
+-
+-COPY . .
+-
+-# VULN-008: Exposing debug port and running with default uvicorn reload
+-# not appropriate for production
+-EXPOSE 8000
+-
+-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+diff --git a/tests/test_api.py b/tests/test_api.py
+index 3b3c3b1..c43f768 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -1,5 +1,5 @@
+ """
+-Skyline Financial Tech — basic API smoke tests.
++Skyline Financial Tech - basic API smoke tests.
+ Run with: pytest tests/
+ """
+ 

@@ -1,5 +1,5 @@
 """
-Skyline Financial Tech — basic API smoke tests.
+Skyline Financial Tech - basic API smoke tests.
 Run with: pytest tests/
 """
 
@@ -52,10 +52,9 @@ def test_transaction_valid():
 def test_transaction_negative_id_leaks_info():
     """
     Demonstrates VULN-005: error detail should NOT reach the client.
-    This test documents the current (broken) behaviour — it should
+    This test documents the current (broken) behaviour - it should
     be fixed as part of the remediation write-up.
     """
     response = client.get("/transaction/-1")
     assert response.status_code == 500
-    # Current behaviour: internal path leaks in detail field
     assert "detail" in response.json()

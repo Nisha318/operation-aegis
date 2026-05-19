@@ -1,35 +1,83 @@
-# Operation Aegis 🛡️
-### DevSecOps Capstone — Skyline Financial Tech
+# Operation Aegis
+### DevSecOps Capstone - Skyline Financial Tech
 
 > A fully automated, end-to-end security pipeline built on GitHub Actions.
-> Four phases of defence protecting a vulnerable demo banking API.
+> Four layers of defence protecting a vulnerable demo banking API.
 
-![Phase 1 SAST + SCA](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase1-sast-sca.yml?label=Phase%201%20SAST%2BSCA&style=flat-square)
-![Phase 2 DAST](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase2-dast.yml?label=Phase%202%20DAST&style=flat-square)
-![Phase 3 Secrets](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase3-secrets.yml?label=Phase%203%20Secrets&style=flat-square)
-![Phase 4 Reporting](https://img.shields.io/github/actions/workflow/status/YOUR_USERNAME/operation-aegis/phase4-reporting.yml?label=Phase%204%20Reporting&style=flat-square)
+![SAST + SCA](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/sast-sca.yml?label=SAST%2BSCA&style=flat-square)
+![DAST](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/dast.yml?label=DAST&style=flat-square)
+![Secrets](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/secrets-scan.yml?label=Secrets&style=flat-square)
+![Reporting](https://img.shields.io/github/actions/workflow/status/Nisha318/operation-aegis/reporting.yml?label=Reporting&style=flat-square)
 
 ---
+
+## Pipeline architecture
+
+```mermaid
+flowchart TD
+    A([Push to main / PR / Schedule / Manual]) --> B
+
+    B[Demo App\nSkyline Financial Tech\nFastAPI + Python] --> C & D & E
+
+    subgraph SAST [SAST + SCA - sast-sca.yml]
+        C1[CodeQL\nStatic analysis]
+        C2[Semgrep\nCustom rules]
+        C3[Trivy\nDeps + image]
+        C4{Quality gate}
+        C1 & C2 & C3 --> C4
+    end
+
+    subgraph SECRETS [Secrets scan - secrets-scan.yml]
+        D1[Gitleaks\nCommit history]
+        D2[TruffleHog\nEntropy scan]
+        D4{Quality gate}
+        D1 & D2 --> D4
+    end
+
+    subgraph DAST [DAST - dast.yml]
+        E1[OWASP ZAP\nBaseline + active]
+        E2[Nikto\nServer recon]
+        E4{Quality gate}
+        E1 & E2 --> E4
+    end
+
+    C --> SAST
+    D --> SECRETS
+    E --> DAST
+
+    C4 & D4 & E4 --> F
+
+    subgraph REPORTING [Reporting - reporting.yml]
+        F1[Aggregate reports]
+        F2[Slack alert]
+        F3[README badge]
+        F1 & F2 & F3
+    end
+
+    F --> REPORTING
+```
 
 ## Repo structure
 
 ```
 operation-aegis/
-├── .github/
-│   └── workflows/
-│       ├── phase1-sast-sca.yml       # CodeQL + Semgrep + Trivy
-│       ├── phase2-dast.yml           # OWASP ZAP + Nikto  (Week 2)
-│       ├── phase3-secrets.yml        # Gitleaks + TruffleHog  (Week 3)
-│       └── phase4-reporting.yml      # Aggregated reports + Slack  (Week 4)
-├── app/
-│   ├── main.py                       # FastAPI demo app (intentionally vulnerable)
-│   ├── requirements.txt              # Pinned deps — includes outdated packages
-│   └── Dockerfile                    # Container image for scanning + DAST
-├── tests/
-│   └── test_api.py                   # Smoke tests (pytest)
-├── docs/
-│   └── threat-model.md               # Architecture threat model (Week 4)
-└── README.md
+.github/
+    workflows/
+        sast-sca.yml        # CodeQL + Semgrep + Trivy
+        dast.yml            # OWASP ZAP + Nikto
+        secrets-scan.yml    # Gitleaks + TruffleHog
+        reporting.yml       # Aggregated reports + Slack
+app/
+    main.py                 # FastAPI demo app (intentionally vulnerable)
+    requirements.txt        # Pinned deps - includes outdated packages
+    Dockerfile              # Container image for scanning + DAST
+tests/
+    test_api.py             # Smoke tests (pytest)
+docs/
+    threat-model.md         # Architecture threat model
+.zap/
+    rules.tsv               # ZAP false positive suppressions
+README.md
 ```
 
 ---
@@ -48,62 +96,59 @@ operation-aegis/
 | VULN-008 | Debug mode in production | `Dockerfile` CMD | Trivy |
 
 > **All vulnerabilities are intentional.** This repo exists to generate real
-> scanner findings for the capstone write-up. Do not deploy.
+> scanner findings for the Operation Aegis write-up. The app runs only as an
+> ephemeral container inside GitHub Actions during DAST scanning. It is never
+> deployed to a live environment.
 
 ---
 
-## Pipeline phases
+## Pipeline
 
-| Phase | Workflow | Triggers | Tools |
-|-------|----------|----------|-------|
-| 1 — SAST + SCA | `phase1-sast-sca.yml` | PR, push to main, schedule, manual | CodeQL, Semgrep, Trivy |
-| 2 — DAST | `phase2-dast.yml` | Push to main, manual | OWASP ZAP, Nikto |
-| 3 — Secrets | `phase3-secrets.yml` | PR, push to main, schedule, manual | Gitleaks, TruffleHog |
-| 4 — Reporting | `phase4-reporting.yml` | After Phase 1-3, manual | Aggregator, Slack |
-
----
-
-## Quick start
-
-```bash
-# Clone and enter the repo
-git clone https://github.com/YOUR_USERNAME/operation-aegis.git
-cd operation-aegis
-
-# Run the demo app locally
-cd app
-pip install -r requirements.txt
-uvicorn main:app --reload
-
-# Run tests
-cd ..
-pip install pytest httpx
-pytest tests/ -v
-
-# Build and inspect the container
-docker build -t skyline-api ./app
-docker run -p 8000:8000 skyline-api
-```
-
-Then visit `http://localhost:8000/docs` for the interactive Swagger UI.
+| Workflow | File | Triggers | Tools |
+|----------|------|----------|-------|
+| SAST + SCA | `sast-sca.yml` | PR, push to main, schedule, manual | CodeQL, Semgrep, Trivy |
+| DAST | `dast.yml` | Push to main, manual | OWASP ZAP, Nikto |
+| Secrets scan | `secrets-scan.yml` | PR, push to main, schedule, manual | Gitleaks, TruffleHog |
+| Reporting | `reporting.yml` | After workflows complete, manual | Aggregator, Slack |
 
 ---
 
 ## Required GitHub secrets
 
-Add these in **Settings → Secrets and variables → Actions** before running workflows:
+Add these in **Settings -> Secrets and variables -> Actions** before running workflows:
 
 | Secret | Used by | Notes |
 |--------|---------|-------|
-| `SEMGREP_APP_TOKEN` | Phase 1 — Semgrep | Free at semgrep.dev — optional but enables dashboard |
-| `SLACK_WEBHOOK_URL` | Phase 4 — Reporting | Incoming webhook from your Slack workspace |
+| `SEMGREP_APP_TOKEN` | Semgrep | Free at semgrep.dev; enables dashboard |
+| `SLACK_WEBHOOK_URL` | Reporting | Incoming webhook from your Slack workspace |
+
+---
+
+## Run locally
+
+```bash
+git clone https://github.com/Nisha318/operation-aegis.git
+cd operation-aegis
+
+cd app
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+Visit `http://localhost:8000/docs` for the Swagger UI.
+
+```bash
+cd ..
+pip install pytest httpx
+pytest tests/ -v
+```
 
 ---
 
 ## Blog post
 
-*Coming soon — Hashnode / dev.to*
+*Coming soon*
 
 ---
 
-*DevSec Blueprint capstone · #DevSecBlueprint*
+*DevSec Blueprint capstone - #DevSecBlueprint*

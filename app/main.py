@@ -1,5 +1,5 @@
 """
-Skyline Financial Tech — Demo API
+Skyline Financial Tech - Demo API
 WARNING: This application contains INTENTIONAL security vulnerabilities
 for the Operation Aegis DevSecOps capstone project.
 DO NOT deploy to production.
@@ -15,7 +15,7 @@ import uvicorn
 
 app = FastAPI(
     title="Skyline Financial Tech API",
-    description="Demo banking API — intentionally vulnerable for security scanning.",
+    description="Demo banking API - intentionally vulnerable for security scanning.",
     version="1.0.0",
 )
 
@@ -26,7 +26,7 @@ AWS_SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"  # noqa: S105
 DB_PASSWORD = "skyline_prod_password_2024!"  # noqa: S105
 JWT_SECRET = "super-secret-jwt-key-do-not-share"  # noqa: S105
 
-# In-memory SQLite for demo
+
 def get_db():
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -49,7 +49,6 @@ def get_balance(username: str):
     Try: username=alice' OR '1'='1
     """
     conn = get_db()
-    # BAD: direct string interpolation — SQL injection
     query = f"SELECT balance FROM accounts WHERE username = '{username}'"
     cursor = conn.execute(query)
     row = cursor.fetchone()
@@ -64,11 +63,10 @@ def get_balance(username: str):
 @app.get("/admin/ping")
 def ping_host(host: str):
     """
-    Admin utility — ping a host to check connectivity.
+    Admin utility - ping a host to check connectivity.
     VULNERABLE: unsanitised input passed to shell.
     Try: host=localhost; cat /etc/passwd
     """
-    # BAD: shell=True with user-supplied input
     result = subprocess.run(
         f"ping -c 1 {host}", shell=True, capture_output=True, text=True  # noqa: S602
     )
@@ -76,8 +74,7 @@ def ping_host(host: str):
 
 
 # ------------------------------------------------------------------ #
-# VULN-004: Broken authentication — no token validation
-# (detected by Semgrep custom rules / ZAP active scan)
+# VULN-004: Broken authentication - no token validation
 # ------------------------------------------------------------------ #
 @app.post("/transfer")
 def transfer_funds(
@@ -88,13 +85,10 @@ def transfer_funds(
 ):
     """
     Transfer funds between accounts.
-    VULNERABLE: Authorization header is accepted but never validated.
-    Any string (or no string) passes the auth check.
+    VULNERABLE: Authorization header accepted but never validated.
     """
-    # BAD: token presence is checked but value is never verified
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
-    # Missing: actual JWT validation, signature check, expiry check
     return {
         "status": "transfer_complete",
         "from": from_account,
@@ -106,27 +100,25 @@ def transfer_funds(
 
 # ------------------------------------------------------------------ #
 # VULN-005: Sensitive data exposure in error response
-# (detected by Semgrep / ZAP)
 # ------------------------------------------------------------------ #
 @app.get("/transaction/{tx_id}")
 def get_transaction(tx_id: int):
     """
     Retrieve transaction details.
-    VULNERABLE: raw exception detail (including internal paths) exposed to client.
+    VULNERABLE: raw exception detail including internal paths exposed to client.
     """
     try:
         if tx_id < 0:
-            raise ValueError(f"Invalid ID {tx_id} — internal path: {os.getcwd()}/transactions.db")
+            raise ValueError(f"Invalid ID {tx_id} - internal path: {os.getcwd()}/transactions.db")
         if tx_id > 1000:
             raise FileNotFoundError(f"tx_{tx_id}.log not found in {os.getcwd()}")
         return {"tx_id": tx_id, "amount": 250.00, "status": "completed"}
     except Exception as e:
-        # BAD: raw exception message leaks internal details
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ------------------------------------------------------------------ #
-# Healthy endpoint (intentionally clean — for ZAP baseline)
+# Healthy endpoint (intentionally clean - for ZAP baseline)
 # ------------------------------------------------------------------ #
 @app.get("/health")
 def health_check():

@@ -93,13 +93,38 @@ jobs:
             --config "p/secrets" \
             --config "p/owasp-top-ten" \
             --config "p/security-audit" \
-            --metrics=off \
-            --sarif \
-            --output semgrep-results.sarif \
-            --severity WARNING \
-            ./app || true
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+            --sarif --output semgrep-results.sarif \
+            ./app
+
+      - name: Semgrep quality gate
+        run: |
+          # Step 1: build the rule-ID-to-default-severity roster,
+          # resolve every result's real level (falls back to the roster
+          # when a result's own "level" is null), and count how many
+          # resolve to "error".
+          ERROR_COUNT=$(jq '
+            (.runs[0].tool.driver.rules | map({(.id): .defaultConfiguration.level}) | add) as $levels
+            | [.runs[0].results[] | (.level // $levels[.ruleId])]
+            | map(select(. == "error"))
+            | length
+          ' semgrep-results.sarif)
+
+          # Step 2: don't trust that count until it's confirmed numeric.
+          if ! [[ "$ERROR_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: could not determine a valid error count from semgrep-results.sarif" >&2
+            exit 1
+          fi
+
+          echo "Semgrep found $ERROR_COUNT error-level finding(s)."
+
+          # Step 3: decide.
+          if [ "$ERROR_COUNT" -ge 1 ]; then
+            echo "Gate FAILED: high-severity findings present." >&2
+            exit 1
+          fi
+
+          echo "Gate PASSED."
+
 
       - name: Upload Semgrep SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
@@ -116,15 +141,7 @@ jobs:
           path: semgrep-results.sarif
           retention-days: 30
 
-      - name: Fail on HIGH or CRITICAL findings
-        run: |
-          HIGH=$(grep -c '"level": "error"' semgrep-results.sarif || true)
-          if [ "$HIGH" -gt "0" ]; then
-            echo "Semgrep found $HIGH HIGH/CRITICAL findings. Fix before merging."
-            exit 1
-          fi
-          echo "No HIGH/CRITICAL findings from Semgrep."
-
+      
   # ──────────────────────────────────────────────────────────
   # JOB 3: Trivy - dependencies + container image
   # ──────────────────────────────────────────────────────────
@@ -148,6 +165,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: 0
 
+      
       - name: Upload Trivy deps SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         if: always()
@@ -200,6 +218,59 @@ jobs:
             trivy-image-results.sarif
             trivy-image-report.txt
           retention-days: 30
+
+      - name: Trivy dependency quality gate
+        run: |
+          SEVERITIES=$(jq -r '.runs[0].results[] | (.message.text | capture("Severity: (?<sev>[A-Z]+)").sev)' trivy-deps-results.sarif)
+          
+          HIGH_COUNT=$(echo "$SEVERITIES" | grep -c "^HIGH$")
+          CRITICAL_COUNT=$(echo "$SEVERITIES" | grep -c "^CRITICAL$")
+         
+                   
+          if ! [[ "$HIGH_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: could not determine a valid HIGH count from trivy-deps-results.sarif" >&2
+            exit 1
+          fi
+
+          if ! [[ "$CRITICAL_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: could not determine a valid CRITICAL count from trivy-deps-results.sarif" >&2
+            exit 1
+          fi
+          
+           echo "Trivy found $HIGH_COUNT HIGH and $CRITICAL_COUNT CRITICAL finding(s)."
+
+          if [ "$HIGH_COUNT" -ge 1 ] || [ "$CRITICAL_COUNT" -ge 1 ]; then
+            echo "Gate FAILED: high-severity findings present." >&2
+            exit 1
+          fi
+
+          echo "Gate PASSED."
+
+      - name: Trivy image quality gate
+        run: |
+          SEVERITIES=$(jq -r '.runs[0].results[] | (.message.text | capture("Severity: (?<sev>[A-Z]+)").sev)' trivy-image-results.sarif)
+
+          HIGH_COUNT=$(echo "$SEVERITIES" | grep -c "^HIGH$")
+          CRITICAL_COUNT=$(echo "$SEVERITIES" | grep -c "^CRITICAL$")
+
+          if ! [[ "$HIGH_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: could not determine a valid HIGH count from trivy-image-results.sarif" >&2
+            exit 1
+          fi
+
+          if ! [[ "$CRITICAL_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: could not determine a valid CRITICAL count from trivy-image-results.sarif" >&2
+            exit 1
+          fi
+
+          echo "Trivy found $HIGH_COUNT HIGH and $CRITICAL_COUNT CRITICAL image finding(s)."
+
+          if [ "$HIGH_COUNT" -ge 1 ] || [ "$CRITICAL_COUNT" -ge 1 ]; then
+            echo "Gate FAILED: high-severity image findings present." >&2
+            exit 1
+          fi
+
+          echo "Gate PASSED."
 
   # ──────────────────────────────────────────────────────────
   # JOB 4: Gate

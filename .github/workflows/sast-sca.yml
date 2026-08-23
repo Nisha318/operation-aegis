@@ -59,9 +59,33 @@ jobs:
           category: "/language:${{ matrix.language }}"
           output: codeql-results
           upload: always
+      
+      - name: CodeQL quality gate
+        run: |
+          ERROR_COUNT=$(jq '
+            (.runs[0].tool.extensions[0].rules | map({(.id): .defaultConfiguration.level}) | add) as $levels
+            | [.runs[0].results[] | $levels[.ruleId]]
+            | map(select(. == "error"))
+            | length
+          ' codeql-results/python.sarif)
+
+          if ! [[ "$ERROR_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: could not determine a valid error count from codeql-results/python.sarif" >&2
+            exit 1
+          fi
+
+          echo "CodeQL found $ERROR_COUNT error-level finding(s)."
+
+          if [ "$ERROR_COUNT" -ge 1 ]; then
+            echo "Gate FAILED: high-severity findings present." >&2
+            exit 1
+          fi
+
+          echo "Gate PASSED."
 
       - name: Upload CodeQL SARIF as artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: codeql-sarif
           path: codeql-results

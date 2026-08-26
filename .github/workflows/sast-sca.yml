@@ -61,10 +61,6 @@ jobs:
       with:
         category: "/language:${{matrix.language}}"
 
-    # Discovery step, temporary: we don't yet know the actual filename
-    # inside this directory. List it for real before wiring the gate
-    # to a specific path, same as reading the local SARIF file by hand
-    # earlier — no assuming.
     - name: SAST Gate - CodeQL severity check
       run: |
         jq -e '[.runs[0].tool.driver.rules as $rules | .runs[0].results[] | .ruleId as $rid | $rules[] | select(.id == $rid) | .properties."security-severity" | tonumber >= 7] | any | not' "${{ steps.analyze.outputs.sarif-output }}/${{ matrix.language }}.sarif"

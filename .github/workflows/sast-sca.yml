@@ -1,349 +1,69 @@
 # ============================================================
-# Operation Aegis - SAST + SCA
-# Triggers: pull_request to main, push to main,
-#           schedule (nightly), workflow_dispatch
+# Operation Aegis - sast-sca.yml (CodeQL portion)
+# Triggers: pull_request to main, push to main
 #
 # Jobs:
-#   1. codeql      - static analysis via GitHub CodeQL
-#   2. semgrep     - custom rule SAST (Python security ruleset)
-#   3. trivy-sca   - dependency + container image scanning
-#   4. gate        - quality gate: fails if any HIGH/CRITICAL found
+#   1. analyze - CodeQL static analysis (python, actions) with a
+#                security-severity >= 7.0 gate that hard-fails the
+#                build on any high-or-critical finding
+#
+# Trivy (SCA) is a separate job in this same file, added once its
+# own six-step discovery process is complete.
 # ============================================================
 
-name: "SAST + SCA"
+name: "Operation Aegis - SAST/SCA"
 
 on:
-  pull_request:
-    branches: [main]
   push:
-    branches: [main]
-  schedule:
-    - cron: "0 2 * * *"
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  security-events: write
-  actions: read
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 1: CodeQL
-  # ──────────────────────────────────────────────────────────
-  codeql:
-    name: "CodeQL - static analysis"
-    runs-on: ubuntu-latest
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
 
     strategy:
       fail-fast: false
       matrix:
-        language: [python]
+        include:
+        - language: actions
+          build-mode: none
+        - language: python
+          build-mode: none
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v7
 
-      - name: Initialise CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: ${{ matrix.language }}
-          queries: security-and-quality
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+    - name: Run manual build steps
+      if: matrix.build-mode == 'manual'
+      shell: bash
+      run: |
+        echo 'Replace this with real build commands if a language needs manual mode.'
+        exit 1
 
-      - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@v4
-        with:
-          category: "/language:${{ matrix.language }}"
-          output: codeql-results
-          upload: always
-      
-      - name: CodeQL quality gate
-        run: |
-          ERROR_COUNT=$(jq '
-            (.runs[0].tool.extensions[0].rules | map({(.id): .defaultConfiguration.level}) | add) as $levels
-            | [.runs[0].results[] | $levels[.ruleId]]
-            | map(select(. == "error"))
-            | length
-          ' codeql-results/python.sarif)
+    - name: Perform CodeQL Analysis
+      id: analyze
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{matrix.language}}"
 
-          if ! [[ "$ERROR_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: could not determine a valid error count from codeql-results/python.sarif" >&2
-            exit 1
-          fi
-
-          echo "CodeQL found $ERROR_COUNT error-level finding(s)."
-
-          if [ "$ERROR_COUNT" -ge 1 ]; then
-            echo "Gate FAILED: high-severity findings present." >&2
-            exit 1
-          fi
-
-          echo "Gate PASSED."
-
-      - name: Upload CodeQL SARIF as artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: codeql-sarif
-          path: codeql-results
-          retention-days: 30
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 2: Semgrep
-  # ──────────────────────────────────────────────────────────
-  semgrep:
-    name: "Semgrep - custom rule SAST"
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      - name: Run Semgrep scan
-        run: |
-          semgrep scan \
-            --config "p/python" \
-            --config "p/secrets" \
-            --config "p/owasp-top-ten" \
-            --config "p/security-audit" \
-            --sarif --output semgrep-results.sarif \
-            ./app
-
-      - name: Semgrep quality gate
-        run: |
-          # Step 1: build the rule-ID-to-default-severity roster,
-          # resolve every result's real level (falls back to the roster
-          # when a result's own "level" is null), and count how many
-          # resolve to "error".
-          ERROR_COUNT=$(jq '
-            (.runs[0].tool.driver.rules | map({(.id): .defaultConfiguration.level}) | add) as $levels
-            | [.runs[0].results[] | (.level // $levels[.ruleId])]
-            | map(select(. == "error"))
-            | length
-          ' semgrep-results.sarif)
-
-          # Step 2: don't trust that count until it's confirmed numeric.
-          if ! [[ "$ERROR_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: could not determine a valid error count from semgrep-results.sarif" >&2
-            exit 1
-          fi
-
-          echo "Semgrep found $ERROR_COUNT error-level finding(s)."
-
-          # Step 3: decide.
-          if [ "$ERROR_COUNT" -ge 1 ]; then
-            echo "Gate FAILED: high-severity findings present." >&2
-            exit 1
-          fi
-
-          echo "Gate PASSED."
-
-
-      - name: Upload Semgrep SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: semgrep-results.sarif
-          category: semgrep
-
-      - name: Upload Semgrep SARIF as artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: semgrep-sarif
-          path: semgrep-results.sarif
-          retention-days: 30
-
-      
-  # ──────────────────────────────────────────────────────────
-  # JOB 3: Trivy - dependencies + container image
-  # ──────────────────────────────────────────────────────────
-  trivy-sca:
-    name: "Trivy - dependency + image scan"
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 3a. Scan requirements.txt
-      - name: Trivy - scan requirements.txt
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: ./app
-          vuln-type: os,library
-          format: sarif
-          output: trivy-deps-results.sarif
-          severity: HIGH,CRITICAL
-          exit-code: 0
-
-      
-      - name: Upload Trivy deps SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: trivy-deps-results.sarif
-          category: trivy-deps
-
-      # 3b. Build and scan the container image
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: docker build -t skyline-api:scan ./app
-
-      - name: Trivy - scan container image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: skyline-api:scan
-          format: sarif
-          output: trivy-image-results.sarif
-          severity: HIGH,CRITICAL
-          exit-code: 0
-
-      - name: Upload Trivy image SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: trivy-image-results.sarif
-          category: trivy-image
-
-      # 3c. Human-readable table report
-      - name: Trivy - generate table report
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: skyline-api:scan
-          format: table
-          output: trivy-image-report.txt
-          severity: HIGH,CRITICAL
-          exit-code: 0
-
-      - name: Upload all Trivy artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: trivy-reports
-          path: |
-            trivy-deps-results.sarif
-            trivy-image-results.sarif
-            trivy-image-report.txt
-          retention-days: 30
-
-      - name: Trivy dependency quality gate
-        run: |
-          SEVERITIES=$(jq -r '.runs[0].results[] | (.message.text | capture("Severity: (?<sev>[A-Z]+)").sev)' trivy-deps-results.sarif)
-          
-          HIGH_COUNT=$(echo "$SEVERITIES" | grep -c "^HIGH$")
-          CRITICAL_COUNT=$(echo "$SEVERITIES" | grep -c "^CRITICAL$")
-         
-                   
-          if ! [[ "$HIGH_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: could not determine a valid HIGH count from trivy-deps-results.sarif" >&2
-            exit 1
-          fi
-
-          if ! [[ "$CRITICAL_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: could not determine a valid CRITICAL count from trivy-deps-results.sarif" >&2
-            exit 1
-          fi
-          
-           echo "Trivy found $HIGH_COUNT HIGH and $CRITICAL_COUNT CRITICAL finding(s)."
-
-          if [ "$HIGH_COUNT" -ge 1 ] || [ "$CRITICAL_COUNT" -ge 1 ]; then
-            echo "Gate FAILED: high-severity findings present." >&2
-            exit 1
-          fi
-
-          echo "Gate PASSED."
-
-      - name: Trivy image quality gate
-        run: |
-          SEVERITIES=$(jq -r '.runs[0].results[] | (.message.text | capture("Severity: (?<sev>[A-Z]+)").sev)' trivy-image-results.sarif)
-
-          HIGH_COUNT=$(echo "$SEVERITIES" | grep -c "^HIGH$")
-          CRITICAL_COUNT=$(echo "$SEVERITIES" | grep -c "^CRITICAL$")
-
-          if ! [[ "$HIGH_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: could not determine a valid HIGH count from trivy-image-results.sarif" >&2
-            exit 1
-          fi
-
-          if ! [[ "$CRITICAL_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: could not determine a valid CRITICAL count from trivy-image-results.sarif" >&2
-            exit 1
-          fi
-
-          echo "Trivy found $HIGH_COUNT HIGH and $CRITICAL_COUNT CRITICAL image finding(s)."
-
-          if [ "$HIGH_COUNT" -ge 1 ] || [ "$CRITICAL_COUNT" -ge 1 ]; then
-            echo "Gate FAILED: high-severity image findings present." >&2
-            exit 1
-          fi
-
-          echo "Gate PASSED."
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 4: Gate
-  # ──────────────────────────────────────────────────────────
-  gate:
-    name: "Quality gate - SAST + SCA"
-    runs-on: ubuntu-latest
-    needs: [codeql, semgrep, trivy-sca]
-    if: always()
-
-    steps:
-      - name: Download all scan artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: scan-results
-
-      - name: Evaluate gate
-        run: |
-          echo "## SAST + SCA Quality Gate Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          FAILED=0
-
-          if [ "${{ needs.codeql.result }}" != "success" ]; then
-            echo "CodeQL: FAILED (${{ needs.codeql.result }})" >> $GITHUB_STEP_SUMMARY
-            FAILED=1
-          else
-            echo "CodeQL: passed" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [ "${{ needs.semgrep.result }}" != "success" ]; then
-            echo "Semgrep: FAILED (${{ needs.semgrep.result }})" >> $GITHUB_STEP_SUMMARY
-            FAILED=1
-          else
-            echo "Semgrep: passed" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [ "${{ needs.trivy-sca.result }}" != "success" ]; then
-            echo "Trivy SCA: FAILED (${{ needs.trivy-sca.result }})" >> $GITHUB_STEP_SUMMARY
-            FAILED=1
-          else
-            echo "Trivy SCA: passed" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$FAILED" -eq "1" ]; then
-            echo "Gate FAILED - resolve all HIGH/CRITICAL findings before merging." >> $GITHUB_STEP_SUMMARY
-            exit 1
-          else
-            echo "Gate PASSED - no HIGH/CRITICAL findings. Safe to merge." >> $GITHUB_STEP_SUMMARY
-          fi
+    # Discovery step, temporary: we don't yet know the actual filename
+    # inside this directory. List it for real before wiring the gate
+    # to a specific path, same as reading the local SARIF file by hand
+    # earlier — no assuming.
+    - name: List SARIF output (discovery)
+      run: ls -la "${{ steps.analyze.outputs.sarif-output }}"

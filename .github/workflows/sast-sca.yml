@@ -20,24 +20,14 @@ on:
     branches: [ "main" ]
 
 jobs:
-  analyze:
-    name: Analyze (${{ matrix.language }})
-    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+  analyze-actions:
+    name: Analyze (actions)
+    runs-on: ubuntu-latest
     permissions:
       security-events: write
       packages: read
       actions: read
       contents: read
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - language: actions
-          build-mode: none
-        - language: python
-          build-mode: none
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
@@ -45,22 +35,48 @@ jobs:
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
       with:
-        languages: ${{ matrix.language }}
-        build-mode: ${{ matrix.build-mode }}
-
-    - name: Run manual build steps
-      if: matrix.build-mode == 'manual'
-      shell: bash
-      run: |
-        echo 'Replace this with real build commands if a language needs manual mode.'
-        exit 1
+        languages: actions
+        build-mode: none
 
     - name: Perform CodeQL Analysis
       id: analyze
       uses: github/codeql-action/analyze@v4
       with:
-        category: "/language:${{matrix.language}}"
+        category: "/language:actions"
 
-    - name: SAST Gate - CodeQL severity check
+    # KNOWN LIMITATION (logged in decision log): this job uses
+    # codeql-action's diff-informed analysis, which only reports alerts
+    # in changed lines on this run. Accepted for now since the actual
+    # known vulnerabilities live in app/main.py, covered by the
+    # full-scan python job below, not in workflow YAML.
+    - name: SAST Gate - CodeQL severity check (actions, diff-scoped)
       run: |
-        jq -e '[.runs[0].tool.driver.rules as $rules | .runs[0].results[] | .ruleId as $rid | $rules[] | select(.id == $rid) | .properties."security-severity" | tonumber >= 7] | any | not' "${{ steps.analyze.outputs.sarif-output }}/${{ matrix.language }}.sarif"
+        jq -e '[.runs[0].tool.driver.rules as $rules | .runs[0].results[] | .ruleId as $rid | $rules[] | select(.id == $rid) | .properties."security-severity" | tonumber >= 7] | any | not' "${{ steps.analyze.outputs.sarif-output }}/actions.sarif"
+
+  analyze-python:
+    name: Analyze (python, full scan via CodeQL CLI)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Install CodeQL CLI
+      run: gh extension install github/gh-codeql
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Create CodeQL database (full scan, no overlay/incremental)
+      run: gh codeql database create -l python codeql-db
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Run CodeQL analysis
+      run: gh codeql database analyze --format=sarifv2.1.0 --download -o results.sarif -- codeql-db codeql/python-queries
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: SAST Gate - CodeQL severity check (python, full scan)
+      run: |
+        jq -e '[.runs[0].tool.driver.rules as $rules | .runs[0].results[] | .ruleId as $rid | $rules[] | select(.id == $rid) | .properties."security-severity" | tonumber >= 7] | any | not' results.sarif

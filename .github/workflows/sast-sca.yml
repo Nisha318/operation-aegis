@@ -72,10 +72,17 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
 
+
     - name: Run CodeQL analysis
       run: gh codeql database analyze --format=sarifv2.1.0 --download -o results.sarif -- codeql-db codeql/python-queries
       env:
         GH_TOKEN: ${{ github.token }}
+      
+    - name: Upload CodeQL artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: codeql-python-results
+        path: results.sarif
 
     - name: SAST Gate - CodeQL severity check (python, full scan)
       run: |

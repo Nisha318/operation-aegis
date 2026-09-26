@@ -1,14 +1,19 @@
 # ============================================================
-# Operation Aegis - sast-sca.yml (CodeQL portion)
-# Triggers: pull_request to main, push to main
+# Operation Aegis - SAST/SCA Pipeline (CodeQL)
+#
+# Triggers: push to main, pull request targeting main
 #
 # Jobs:
-#   1. analyze - CodeQL static analysis (python, actions) with a
-#                security-severity >= 7.0 gate that hard-fails the
-#                build on any high-or-critical finding
+#   analyze-actions - CodeQL static analysis of GitHub Actions
+#                     workflow files
+#   analyze-python  - CodeQL static analysis of the application
+#                     source, run as a full-repository scan via
+#                     the CodeQL CLI rather than relying on the
+#                     pull request diff scope
 #
-# Trivy (SCA) is a separate job in this same file, added once its
-# own six-step discovery process is complete.
+# Both jobs produce SARIF output only. Severity evaluation and
+# pass/fail enforcement happen in a separate downstream quality
+# gate job, not within the scanning jobs themselves.
 # ============================================================
 
 name: "Operation Aegis - SAST/SCA"
@@ -49,9 +54,11 @@ jobs:
     # in changed lines on this run. Accepted for now since the actual
     # known vulnerabilities live in app/main.py, covered by the
     # full-scan python job below, not in workflow YAML.
-    - name: SAST Gate - CodeQL severity check (actions, diff-scoped)
-      run: |
-        jq -e '[.runs[0].tool.driver.rules as $rules | .runs[0].results[] | .ruleId as $rid | $rules[] | select(.id == $rid) | .properties."security-severity" | tonumber >= 7] | any | not' "${{ steps.analyze.outputs.sarif-output }}/actions.sarif"
+    - name: Upload CodeQL artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: codeql-actions-results
+        path: "${{ steps.analyze.outputs.sarif-output }}/actions.sarif"
 
   analyze-python:
     name: Analyze (python, full scan via CodeQL CLI)
@@ -72,18 +79,205 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
 
-
     - name: Run CodeQL analysis
       run: gh codeql database analyze --format=sarifv2.1.0 --download -o results.sarif -- codeql-db codeql/python-queries
       env:
         GH_TOKEN: ${{ github.token }}
-      
+
     - name: Upload CodeQL artifact
       uses: actions/upload-artifact@v7
       with:
         name: codeql-python-results
         path: results.sarif
 
-    - name: SAST Gate - CodeQL severity check (python, full scan)
+
+          analyze-semgrep:
+    name: Analyze (semgrep)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install Semgrep
+      run: pip install semgrep
+
+    - name: Run Semgrep scan
       run: |
-        jq -e '[.runs[0].tool.driver.rules as $rules | .runs[0].results[] | .ruleId as $rid | $rules[] | select(.id == $rid) | .properties."security-severity" | tonumber >= 7] | any | not' results.sarif
+        semgrep scan \
+          --config "p/python" \
+          --config "p/secrets" \
+          --config "p/owasp-top-ten" \
+          --config "p/security-audit" \
+          --sarif --output semgrep-results.sarif \
+          ./app
+
+    - name: Upload Semgrep SARIF to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v4
+      if: always()
+      with:
+        sarif_file: semgrep-results.sarif
+        category: semgrep
+
+    - name: Upload Semgrep artifact
+      uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: semgrep-results
+        path: semgrep-results.sarif
+
+  analyze-trivy:
+    name: Analyze (trivy - dependencies + image)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Trivy - scan requirements.txt
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        scan-type: fs
+        scan-ref: ./app
+        vuln-type: os,library
+        format: sarif
+        output: trivy-deps-results.sarif
+        exit-code: 0
+
+    - name: Upload Trivy deps SARIF to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v4
+      if: always()
+      with:
+        sarif_file: trivy-deps-results.sarif
+        category: trivy-deps
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Skyline API image
+      run: docker build -t skyline-api:scan ./app
+
+    - name: Trivy - scan container image
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: skyline-api:scan
+        format: sarif
+        output: trivy-image-results.sarif
+        exit-code: 0
+
+    - name: Upload Trivy image SARIF to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v4
+      if: always()
+      with:
+        sarif_file: trivy-image-results.sarif
+        category: trivy-image
+
+    - name: Trivy - generate table report
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: skyline-api:scan
+        format: table
+        output: trivy-image-report.txt
+        severity: HIGH,CRITICAL
+
+    - name: Upload Trivy artifacts
+      uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: trivy-results
+        path: |
+          trivy-deps-results.sarif
+          trivy-image-results.sarif
+          trivy-image-report.txt
+
+  gate:
+    name: "Quality gate - SAST + SCA"
+    runs-on: ubuntu-latest
+    needs: [analyze-actions, analyze-python, analyze-semgrep, analyze-trivy]
+    if: always()
+
+    steps:
+      - name: Download all scan artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: scan-results
+
+      - name: Evaluate gate
+        run: |
+          # --- CodeQL (actions), numeric security-severity, normalized to HIGH/CRITICAL at >= 7.0 ---
+          CODEQL_ACTIONS_FILE="scan-results/codeql-actions-results/actions.sarif"
+          CODEQL_ACTIONS_HIGH=0
+          if [ -f "$CODEQL_ACTIONS_FILE" ]; then
+            CODEQL_ACTIONS_HIGH=$(jq '
+              [.runs[0].tool.driver.rules as $rules
+               | .runs[0].results[]
+               | .ruleId as $rid
+               | ($rules[] | select(.id == $rid) | .properties."security-severity" // "0" | tonumber)
+               | select(. >= 7)]
+              | length
+            ' "$CODEQL_ACTIONS_FILE")
+          fi
+
+          # --- CodeQL (python), numeric security-severity, normalized to HIGH/CRITICAL at >= 7.0 ---
+          CODEQL_PYTHON_FILE="scan-results/codeql-python-results/results.sarif"
+          CODEQL_PYTHON_HIGH=0
+          if [ -f "$CODEQL_PYTHON_FILE" ]; then
+            CODEQL_PYTHON_HIGH=$(jq '
+              [.runs[0].tool.driver.rules as $rules
+               | .runs[0].results[]
+               | .ruleId as $rid
+               | ($rules[] | select(.id == $rid) | .properties."security-severity" // "0" | tonumber)
+               | select(. >= 7)]
+              | length
+            ' "$CODEQL_PYTHON_FILE")
+          fi
+
+          # --- Semgrep, rule-lookup resolved level, normalized: error == HIGH ---
+          SEMGREP_FILE="scan-results/semgrep-results/semgrep-results.sarif"
+          SEMGREP_HIGH=0
+          if [ -f "$SEMGREP_FILE" ]; then
+            SEMGREP_HIGH=$(jq '
+              (.runs[0].tool.driver.rules | map({(.id): .defaultConfiguration.level}) | add) as $levels
+              | [.runs[0].results[] | (.level // $levels[.ruleId])]
+              | map(select(. == "error"))
+              | length
+            ' "$SEMGREP_FILE")
+          fi
+
+          # --- Trivy (deps + image), text-extracted severity, native scale already matches normalized scale ---
+          TRIVY_HIGH=0
+          for f in scan-results/trivy-results/trivy-deps-results.sarif scan-results/trivy-results/trivy-image-results.sarif; do
+            if [ -f "$f" ]; then
+              COUNT=$(jq -r '.runs[0].results[] | (.message.text | capture("Severity: (?<sev>[A-Z]+)").sev)' "$f" \
+                | grep -cE "^(HIGH|CRITICAL)$")
+              TRIVY_HIGH=$((TRIVY_HIGH + COUNT))
+            fi
+          done
+
+          # --- Validate every count before trusting it ---
+          for name in CODEQL_ACTIONS_HIGH CODEQL_PYTHON_HIGH SEMGREP_HIGH TRIVY_HIGH; do
+            val="${!name}"
+            if ! [[ "$val" =~ ^[0-9]+$ ]]; then
+              echo "ERROR: $name is not a valid number ($val)" >&2
+              exit 1
+            fi
+          done
+
+          TOTAL_HIGH=$((CODEQL_ACTIONS_HIGH + CODEQL_PYTHON_HIGH + SEMGREP_HIGH + TRIVY_HIGH))
+          echo "CodeQL (actions): $CODEQL_ACTIONS_HIGH | CodeQL (python): $CODEQL_PYTHON_HIGH | Semgrep: $SEMGREP_HIGH | Trivy: $TRIVY_HIGH | Total CRITICAL/HIGH: $TOTAL_HIGH"
+
+          if [ "$TOTAL_HIGH" -ge 1 ]; then
+            echo "Gate FAILED: $TOTAL_HIGH CRITICAL/HIGH finding(s) across SAST + SCA." >&2
+            exit 1
+          fi
+
+          echo "Gate PASSED - no CRITICAL/HIGH findings."

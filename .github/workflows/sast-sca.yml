@@ -91,7 +91,7 @@ jobs:
         path: results.sarif
 
 
-          analyze-semgrep:
+  analyze-semgrep:
     name: Analyze (semgrep)
     runs-on: ubuntu-latest
     permissions:
